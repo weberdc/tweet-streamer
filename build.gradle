@@ -1,0 +1,74 @@
+/*
+ * Copyright 2016 Derek Weber
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+apply plugin: 'java'
+apply plugin: 'application'
+apply plugin: 'idea'
+apply plugin: 'distribution'
+
+mainClassName = 'au.org.dcw.twitter.ingest.StreamerApp'
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+jar {
+    baseName = 'twitter-streamer'
+    version =  '0.1'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+	// https://mvnrepository.com/artifact/org.twitter4j/twitter4j-core
+	compile group: 'org.twitter4j', name: 'twitter4j-core', version: '4.0.4'
+	// https://mvnrepository.com/artifact/org.twitter4j/twitter4j-stream
+	compile group: 'org.twitter4j', name: 'twitter4j-stream', version: '4.0.4'
+    compile("com.beust:jcommander:[1.48,)")
+    compile("com.fasterxml.jackson.core:jackson-core:2.7.2")
+    compile("com.fasterxml.jackson.core:jackson-databind:2.7.2")
+}
+
+def timestamp() {
+    def date = new Date()
+    return date.format('yyyyMMddHHmmss')
+}
+
+distributions {
+    main {
+        contents {
+            from { 'README.md' }
+            from { 'LICENSE' }
+            from { 'twitter.properties-template' }
+            from { 'proxy.properties-template' }
+        }
+    }
+    timestamped {
+        baseName = project.name + '-SNAPSHOT-' + timestamp()
+        contents {
+            with main.contents
+        }
+    }
+    privileged {
+        baseName = project.name + '_with-credentials-SNAPSHOT-' + timestamp()
+        contents {
+            with main.contents
+            // include own twitter credentials
+            from { 'twitter.properties' }
+        }
+    }
+}
