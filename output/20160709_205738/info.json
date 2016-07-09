@@ -1,7 +1,0 @@
-{
-  "filter" : [ "#auspol", "#ausvotes" ],
-  "geo_boxes" : [ ],
-  "include_media" : false,
-  "queue_size" : 10,
-  "user_ids" : [ ]
-}
