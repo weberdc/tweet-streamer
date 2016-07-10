@@ -4,6 +4,10 @@
 ### Gradle ###
 .gradle
 build/
+gradle/caches
+gradle/daemon
+gradle/native
+gradle/wrapper/dists
 
 # Ignore Gradle GUI config
 gradle-app.setting
