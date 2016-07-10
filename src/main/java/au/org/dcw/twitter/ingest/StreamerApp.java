@@ -31,6 +31,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -39,9 +40,11 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.stream.Collectors;
 
 import javax.imageio.ImageIO;
 
+import com.beust.jcommander.IStringConverter;
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -87,15 +90,58 @@ public final class StreamerApp {
             this.rawJSON = TwitterObjectFactory.getRawJSON(status);
         }
     }
+
+    public class GeoboxConverter implements IStringConverter<double[]> {
+        @Override
+        public double[] convert(String value) {
+            double[] geobox = new double[4];
+            int i = 0;
+            for (String longStr : value.split(",")) {
+                geobox[i++] = Long.parseLong(longStr);
+            }
+            return geobox;
+        }
+    }
+
+    public class FilterLevelConverter implements IStringConverter<String> {
+        @Override
+        public String convert(String value) {
+            if (value.equalsIgnoreCase("low")) {
+                return "low";
+            } else if (value.equalsIgnoreCase("medium")) {
+                return "medium";
+            } else {
+                System.err.println("Filter level \"" + value +
+                                   "\" not recognised. Resorting to \"none\".");
+            }
+            return "none";
+        }
+    }
+
     private static final DateTimeFormatter TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
     private static final DateTimeFormatter DT_HOUR = DateTimeFormatter.ofPattern("yyyyMMddHH");
+    private static final int MAX_TRACK_TERMS = 400;
+    private static final int FOLLOW_LIMIT = 5000;
+    private static final int GEOBOX_LIMIT = 25;
 
-    // TODO: add follow ids and geoboxes
     @Parameter(names = { "-t", "--term" }, description = "Filter term", variableArity = true)
     private final List<String> filterTerms = new ArrayList<>();
 
     @Parameter(names = { "-u", "--user-id" }, description = "ID of a user to follow")
     private final List<Long> userIds = new ArrayList<>();
+
+    @Parameter(names = { "-g", "--geo" },
+               description = "Geo-boxes as two lat/longs expressed as four doubles separated by spaces",
+               converter = GeoboxConverter.class)
+    private final List<double[]> geoboxen = new ArrayList<>();
+
+    @Parameter(names = { "-l", "--language" }, description = "Specify Tweet language (BCP 47)")
+    private final List<String> languages = new ArrayList<>(Arrays.asList("en"));
+
+    @Parameter(names = { "-f", "--filter-level" },
+               description = "Filter level (options: none, low, medium)",
+               converter = FilterLevelConverter.class)
+    private String filterLevel = "none";
 
     @Parameter(names = { "-o", "--output" },
                description = "Root directory to which to write output")
@@ -127,12 +173,21 @@ public final class StreamerApp {
      *     -c, --credentials
      *        Properties file with Twitter OAuth credentials
      *        Default: ./twitter.properties
+     *     -f, --filter-level
+     *        Filter level (options none, low, medium)
+     *        Default: none
+     *     -g, --geo
+     *        Geo-boxes as two lat/longs expressed as four doubles separated by spaces
+     *        Default: []
      *     -h, --help
      *        Print usage instructions
      *        Default: false
      *     -i, --include-media
      *        Include media from tweets
      *        Default: false
+     *     -l, --language
+     *        Specify Tweet language (BCP 47)
+     *        Default: [en]
      *     -o, --output
      *        Root directory to which to write output
      *        Default: ./output
@@ -233,23 +288,71 @@ public final class StreamerApp {
     }
 
     private FilterQuery createFilterQuery() {
-        String[] termsArray = this.filterTerms.toArray(new String[this.filterTerms.size()]);
-        long[] idsArray = this.toPrimitiveArray();
-        if (termsArray.length > 0 && idsArray.length == 0) {
-            return new FilterQuery(termsArray);
-        } else if (idsArray.length > 0 && termsArray.length == 0) {
-            return new FilterQuery(idsArray);
-        } else {
-            return new FilterQuery(0, idsArray, termsArray);
+        String[] termsArray = this.limit(this.toStringArray(this.filterTerms), MAX_TRACK_TERMS);
+        long[] idsArray = this.limit(this.toPrimitiveArray(this.userIds), FOLLOW_LIMIT);
+        String[] langsArray = this.toStringArray(this.languages);
+        double[][] geoboxenArray = this.limit(this.toDoubleArrayArray(this.geoboxen), GEOBOX_LIMIT);
+
+        FilterQuery filter = new FilterQuery();
+        if (termsArray.length > 0) {
+            filter.track(termsArray);
+        } else if (idsArray.length > 0) {
+            filter.follow(idsArray);
+        } else if (langsArray.length > 0) {
+            filter.language(langsArray);
+        } else if (geoboxenArray.length > 0) {
+            filter.locations(geoboxenArray);
         }
+
+        filter.filterLevel(this.filterLevel);
+        // if (langsArray.length == 0) {
+        // filter.language(new String[] { "en" });
+        // }
+
+        return filter;
     }
 
-    private long[] toPrimitiveArray() {
-        long[] ids = new long[this.userIds.size()];
-        for (int i = 0; i < this.userIds.size(); i++) {
-            ids[i] = this.userIds.get(i).longValue();
+    private double[][] limit(double[][] array, int maxLength) {
+        if (array.length > maxLength) {
+            double[][] limited = new double[maxLength][];
+            System.arraycopy(array, 0, limited, 0, maxLength);
+            return limited;
         }
-        return ids;
+        return array;
+    }
+
+    private long[] limit(long[] array, int maxLength) {
+        if (array.length > maxLength) {
+            long[] limited = new long[maxLength];
+            System.arraycopy(array, 0, limited, 0, maxLength);
+            return limited;
+        }
+        return array;
+    }
+
+    private String[] limit(String[] array, int maxLength) {
+        if (array.length > maxLength) {
+            String[] limited = new String[maxLength];
+            System.arraycopy(array, 0, limited, 0, maxLength);
+            return limited;
+        }
+        return array;
+    }
+
+    private double[][] toDoubleArrayArray(List<double[]> list) {
+        return list.toArray(new double[list.size()][]);
+    }
+
+    private String[] toStringArray(List<String> list) {
+        return list.toArray(new String[list.size()]);
+    }
+
+    private long[] toPrimitiveArray(List<Long> listOfLongs) {
+        long[] longArray = new long[listOfLongs.size()];
+        for (int i = 0; i < listOfLongs.size(); i++) {
+            longArray[i] = listOfLongs.get(i).longValue();
+        }
+        return longArray;
     }
 
     protected static String nowStr(final DateTimeFormatter formatter) {
@@ -516,11 +619,13 @@ public final class StreamerApp {
      */
     private void reportConfiguration() {
         System.out.println("== BEGIN Configuration ==");
-        System.out.println("identity: " + this.credentialsFile);
-        System.out.println("queue: " + this.queueSize);
+        System.out.println("credentials: " + this.credentialsFile);
+        System.out.println("queue size: " + this.queueSize);
         System.out.println("filters:" + this.filterTerms);
         System.out.println("users: " + this.userIds);
-        System.out.println("geoboxes: " + null);
+        System.out.println("geoboxes: " +
+                           this.geoboxen.stream().map(Arrays::asList).collect(Collectors.toList()));
+        System.out.println("languages: " + this.languages);
         System.out.println("media: " + this.includeMedia);
         System.out.println("debug: " + this.debug);
         System.out.println("== END Configuration ==");

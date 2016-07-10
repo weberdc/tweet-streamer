@@ -90,3 +90,4 @@ proxy.properties
 .project
 .classpath
 .settings
+/bin/
