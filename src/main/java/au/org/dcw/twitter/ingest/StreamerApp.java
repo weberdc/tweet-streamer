@@ -153,7 +153,7 @@ public final class StreamerApp {
 
     @Parameter(names = { "-q", "--queue-size" },
                description = "Size of processing queue (in tweets)")
-    private Integer queueSize = 2014;
+    private Integer queueSize = 1024;
 
     @Parameter(names = "-debug", description = "Debug mode")
     private boolean debug = false;
@@ -462,6 +462,10 @@ public final class StreamerApp {
         @Override
         public void run() {
             try {
+                String mediaDir = this.outputDir + "/media";
+                if (StreamerApp.this.includeMedia) {
+                    new File(mediaDir).mkdirs();
+                }
                 while (!this.shuttingDown) {
                     try {
                         final Tweet tweet = this.queue.take();
@@ -475,8 +479,14 @@ public final class StreamerApp {
                         this.writer.write(tweet.rawJSON + "\n");
                         this.writer.flush();
 
-                        @SuppressWarnings("unused")
-                        final Set<String> urls = collectAllURLs(tweet.status);
+                        if (StreamerApp.this.includeMedia) {
+                            int fetched =
+                                StreamerApp.this.fetchMedia(tweet.status.getId(),
+                                                            collectAllURLs(tweet.status), mediaDir);
+                            if (StreamerApp.this.debug) {
+                                System.out.printf("Grabbed %d media...\n", fetched);
+                            }
+                        }
 
                     } catch (final InterruptedException e) {
                         this.shuttingDown = true;
@@ -670,32 +680,24 @@ public final class StreamerApp {
      * @return the number of URLs that referred to media which were successfully
      *         downloaded
      */
-    @SuppressWarnings("unused")
-    private int fetchMedia(final Map<Long, Set<String>> mediaUrls, final String mediaDir) {
-        new File(mediaDir).mkdirs();
-
+    private int fetchMedia(final long tweetId, final Set<String> mediaUrls,
+                           final String mediaDir) {
         int fetched = 0;
-        int tweetCount = 0;
-        for (final Map.Entry<Long, Set<String>> mediaUrl : mediaUrls.entrySet()) {
-            final Long id = mediaUrl.getKey();
-            final Set<String> urls = mediaUrl.getValue();
-            tweetCount++;
-            int mediaCount = 1;
-            for (String urlStr : urls) {
-                urlStr = this.tweak(urlStr);
-                System.out.printf("GET MEDIA %d/%d FROM %s ...", tweetCount, mediaUrls.size(),
-                                  urlStr);
-                final String ext = urlStr.substring(urlStr.lastIndexOf('.') + 1);
-                final String filename = id + "-" + (mediaCount++);
-                try {
-                    final URL url = new URL(urlStr);
-                    final BufferedImage bi = ImageIO.read(url);
-                    ImageIO.write(bi, ext, new File(mediaDir + "/" + filename + "." + ext));
-                    fetched++;
-                    System.out.println(" SUCCESS");
-                } catch (IllegalArgumentException | IOException e) {
-                    System.out.println(" FAIL(" + e.getMessage() + ") - Skipping");
-                }
+        int mediaCount = 1;
+        for (String urlStr : mediaUrls) {
+            urlStr = this.tweak(urlStr);
+            System.out.printf("MEDIA URL? %d/%d FROM %s ...", mediaCount++, mediaUrls.size(),
+                              urlStr);
+            final String ext = urlStr.substring(urlStr.lastIndexOf('.') + 1);
+            final String filename = tweetId + "-" + (mediaCount++) + "." + ext;
+            try {
+                final URL url = new URL(urlStr);
+                final BufferedImage bi = ImageIO.read(url);
+                ImageIO.write(bi, ext, new File(mediaDir + "/" + filename));
+                fetched++;
+                System.out.println(" SUCCESS");
+            } catch (IllegalArgumentException | IOException e) {
+                System.out.println(" FAIL(" + e.getMessage() + ") - Skipping");
             }
         }
         return fetched;
