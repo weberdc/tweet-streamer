@@ -106,7 +106,10 @@ public final class StreamerApp {
     public class FilterLevelConverter implements IStringConverter<String> {
         @Override
         public String convert(String value) {
-            if (value.equalsIgnoreCase("low")) {
+            if (value == null || value.trim().isEmpty()) {
+              System.err.println("Filter level \"" + value +
+                                 "\" not recognised. Resorting to \"none\".");
+            } else if (value.equalsIgnoreCase("low")) {
                 return "low";
             } else if (value.equalsIgnoreCase("medium")) {
                 return "medium";
@@ -119,6 +122,7 @@ public final class StreamerApp {
     }
 
     private static final DateTimeFormatter TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
+    private static final DateTimeFormatter DT_LOG = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter DT_HOUR = DateTimeFormatter.ofPattern("yyyyMMddHH");
     private static final int MAX_TRACK_TERMS = 400;
     private static final int FOLLOW_LIMIT = 5000;
@@ -228,8 +232,9 @@ public final class StreamerApp {
      * @param app the app the fields of which to check
      */
     private static boolean checkFieldsOf(final StreamerApp app) {
-        if (app.filterTerms.isEmpty() && app.userIds.isEmpty()) {
-            System.out.println("Error: one or more filter terms or user IDs must be supplied");
+        if (app.filterTerms.isEmpty() && app.userIds.isEmpty() && app.geoboxen.isEmpty()) {
+            System.out.println("Error: one or more filter terms, user IDs or " +
+                               "geo-boxes must be supplied");
             return false;
         }
         return true;
@@ -305,9 +310,6 @@ public final class StreamerApp {
         }
 
         filter.filterLevel(this.filterLevel);
-        // if (langsArray.length == 0) {
-        // filter.language(new String[] { "en" });
-        // }
 
         return filter;
     }
@@ -461,6 +463,7 @@ public final class StreamerApp {
          */
         @Override
         public void run() {
+            int tweetCount = 0;
             try {
                 String mediaDir = this.outputDir + "/media";
                 if (StreamerApp.this.includeMedia) {
@@ -478,6 +481,12 @@ public final class StreamerApp {
 
                         this.writer.write(tweet.rawJSON + "\n");
                         this.writer.flush();
+                        tweetCount++;
+
+                        if (tweetCount % 1000 == 0) {
+                            System.out.println("[" + StreamerApp.nowStr(StreamerApp.DT_LOG) +
+                                               "] Collected " + tweetCount + " tweets...");
+                        }
 
                         if (StreamerApp.this.includeMedia) {
                             int fetched =
@@ -504,6 +513,8 @@ public final class StreamerApp {
                     }
                 }
             } finally {
+                System.out.println("[" + StreamerApp.nowStr(StreamerApp.DT_LOG) +
+                                   "] Wrapping up. Collected " + tweetCount + " tweets...");
                 this.close();
             }
         }
