@@ -95,7 +95,7 @@ Usage: bin/get-twitter-user[.bat] [options]
        Default: false
 </pre>
 
-Run the app with your desired Twitter screen name, e.g. `weberdc`:
+Run the app with your desired configuration, e.g. `weberdc`, `#auspol`, ...:
 <pre>
 prompt> bin/tweet-streamer --screen-name weberdc -t '#auspol' -debug
 </pre>
