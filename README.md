@@ -2,7 +2,7 @@
 
 Author: **Derek Weber** (with many thanks to [http://twitter4j.org]() examples)
 
-Last updated: **2016-07-08**
+Last updated: **2016-08-18**
 
 Simple app to listen to Twitter's streaming API, given one or more filtering
 terms.
@@ -13,8 +13,9 @@ Requirements:
    + depends on [JSON](http://json.org) ([JSON licence](http://www.json.org/license.html))
  + [FasterXML](http://wiki.fasterxml.com/JacksonHome) (Apache 2.0 licence)
  + [jcommander](http://jcommander.org) (Apache 2.0 licence)
+ + [httpcomponents](https://hc.apache.org/) (Apache 2.0 licence)
 
-Built with [Gradle 2.12](http://gradle.org).
+Built with [Gradle 3.0](http://gradle.org).
 
 ## To Build
 
@@ -26,13 +27,14 @@ By running
 
 `$ ./gradlew installDist` or `$ gradlew.bat installDist`
 
-you will create an installable copy of the app in `PROJECT_ROOT/build/get-twitter-user`.
+you will create an installable copy of the app in `PROJECT_ROOT/build/tweet-streamer`.
 
 Use the target `distZip` to make a distribution in `PROJECT_ROOT/build/distributions`
 or the target `timestampedDistZip` to add a timestamp to the distribution archive filename.
 
 To also include your own local `twitter.properties` file with your Twitter credentials,
-use the target `privilegedDistZip` to make a special distribution in `PROJECT_ROOT/build/distributions` that starts with .
+use the target `privilegedDistZip` to make a special distribution in
+`PROJECT_ROOT/build/distributions` that includes the current credentials.
 
 
 ## Configuration
@@ -50,43 +52,58 @@ the password-related ones commented and the app will ask for the password.
 
 ## Usage
 If you've just downloaded the binary distribution, do this from within the unzipped
-archive (i.e. in the `get-twitter-user` directory). Otherwise, if you've just built
-the app from source, do this from within `PROJECT_ROOT/build/install/get-twitter-user`:
+archive (i.e. in the `tweet-streamer` directory). Otherwise, if you've just built
+the app from source, do this from within `PROJECT_ROOT/build/install/tweet-streamer`:
 <pre>
 Usage: bin/get-twitter-user[.bat] [options]
   Options:
-     -c, --credentials
-         Properties file with Twitter OAuth credential
-         Default: ./twitter.properties
-     -f, --include-favourite-media
-         Include media from favourite tweets
-         Default: false
-     -i, --include-media
-         Include media from tweets
-         Default: false
-     -o, --output
-         Directory to which to write output
-         Default: ./output
-     -s, --screen-name
-         Twitter screen name
-     -u, --user-id
-         Twitter user ID
-     -debug
-         Debug mode
-         Default: false
+    -c, --credentials
+       Properties file with Twitter OAuth credentials
+       Default: ./twitter.properties
+    -f, --filter-level
+       Filter level (options: none, low, medium)
+       Default: none
+    -g, --geo
+       Geo-boxes as two lat/longs expressed as four doubles separated by spaces
+       Default: []
+    -h, --help
+       Print usage instructions
+       Default: false
+    -i, --include-media
+       Include media from tweets
+       Default: false
+    -l, --language
+       Specify Tweet language (BCP 47)
+       Default: [en]
+    -o, --output
+       Root directory to which to write output
+       Default: ./output
+    -q, --queue-size
+       Size of processing queue (in tweets)
+       Default: 1024
+    -s, --screen-name
+       Screen name of a user to follow
+       Default: []
+    -t, --term
+       Filter term
+       Default: []
+    -u, --user-id
+       ID of a user to follow
+       Default: []
+    -debug
+       Debug mode
+       Default: false
 </pre>
 
 Run the app with your desired Twitter screen name, e.g. `weberdc`:
 <pre>
-prompt> bin/get-twitter-user --screen-name weberdc --include-media --include-favourite-media
+prompt> bin/tweet-streamer --screen-name weberdc -t '#auspol' -debug
 </pre>
 
-This will create a directory `output/weberdc` and download the following:
+This will create a directory `output/<timestamp>` and create/download the following:
 
- + `@weberdc`'s profile to `output/weberdc/profile.json`
- + `@weberdc`'s tweets, one per file, to `output/weberdc/statuses/`
- + `@weberdc`'s favourited tweets, one per file, to `output/weberdc/favourites`
- + `@weberdc`'s images and other media mentioned, to `output/weberdc/media`
+ + `info.json` includes the configuration specified (a map of parameters)
+ + matching tweets, one per line, in a file in `output/<timestamp>/tweets/`
 
 Attempts have been made to account for Twitter's rate limits, so at times the
 app will pause, waiting until the rate limit has refreshed. It reports how long
