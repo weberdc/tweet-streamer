@@ -30,6 +30,11 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -45,6 +50,21 @@ import java.util.concurrent.BlockingQueue;
 import java.util.stream.Collectors;
 
 import javax.imageio.ImageIO;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+
+import org.apache.http.Consts;
+import org.apache.http.HttpEntity;
+import org.apache.http.NameValuePair;
+import org.apache.http.client.entity.UrlEncodedFormEntity;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.util.EntityUtils;
 
 import com.beust.jcommander.IStringConverter;
 import com.beust.jcommander.JCommander;
@@ -130,11 +150,15 @@ public final class StreamerApp {
     private static final int FOLLOW_LIMIT = 5000;
     private static final int GEOBOX_LIMIT = 25;
 
+    private final String USER_AGENT = "Mozilla/5.0";
     @Parameter(names = { "-t", "--term" }, description = "Filter term", variableArity = true)
     private final List<String> filterTerms = new ArrayList<>();
 
     @Parameter(names = { "-u", "--user-id" }, description = "ID of a user to follow")
     private final List<Long> userIds = new ArrayList<>();
+
+    @Parameter(names = { "-s", "--screen-name" }, description = "Screen name of a user to follow")
+    private final List<String> screenNames = new ArrayList<>();
 
     @Parameter(names = { "-g", "--geo" },
                description = "Geo-boxes as two lat/longs expressed as four doubles separated by spaces",
@@ -200,6 +224,9 @@ public final class StreamerApp {
      *     -q, --queue-size
      *        Size of processing queue (in tweets)
      *        Default: 2014
+     *     -s, --screen-name
+     *        Screen name of a user to follow
+     *        Default: none
      *     -t, --term
      *        Filter term
      *        Default: none
@@ -234,8 +261,9 @@ public final class StreamerApp {
      * @param app the app the fields of which to check
      */
     private static boolean checkFieldsOf(final StreamerApp app) {
-        if (app.filterTerms.isEmpty() && app.userIds.isEmpty() && app.geoboxen.isEmpty()) {
-            System.out.println("Error: one or more filter terms, user IDs or " +
+        if (app.filterTerms.isEmpty() && app.userIds.isEmpty() && app.screenNames.isEmpty() &&
+            app.geoboxen.isEmpty()) {
+            System.out.println("Error: one or more filter terms, user IDs, screen names or " +
                                "geo-boxes must be supplied");
             return false;
         }
@@ -244,6 +272,7 @@ public final class StreamerApp {
 
     private TweetListener tweetListener;
     private TweetWriter tweetWriter;
+    private CloseableHttpClient httpClient;
 
     /**
      * Runs the app, collecting tweets from Twitter's streaming API, using the
@@ -255,6 +284,9 @@ public final class StreamerApp {
      */
     public void run() throws IOException {
         this.reportConfiguration();
+
+        this.httpClient =
+            HttpClientBuilder.create().setSSLContext(this.setupSSLCertificates()).build();
 
         Thread producer = null;
         Thread consumer = null;
@@ -294,16 +326,72 @@ public final class StreamerApp {
                 System.out.println("StreamerApp shutting down...");
                 // report findings, run time, tweets collected, etc
                 StreamerApp.this.tweetListener.close();
-                StreamerApp.this.tweetWriter.close();
+                // StreamerApp.this.tweetWriter.close();
+                try {
+                    StreamerApp.this.httpClient.close();
+                } catch (IOException e) {
+                    System.err.println("Failed to close http client.");
+                    e.printStackTrace();
+                }
             }
         });
     }
 
+    /**
+     * A forgiving SSL setup is required for talking to https://tweeterid.com/
+     * to do reverse-lookups of user IDs to follow.
+     * <p>
+     *
+     * @see <a href=
+     *      "http://stackoverflow.com/questions/1828775/how-to-handle-invalid-ssl-certificates-with-apache-httpclient">Props
+     *      to this post for how to do this.</a>
+     * @return A forgiving SSL context
+     */
+    private SSLContext setupSSLCertificates() {
+        // configure the SSLContext with a TrustManager
+        SSLContext ctx = null;
+        try {
+            ctx = SSLContext.getInstance("TLS");
+            ctx.init(new KeyManager[0], new TrustManager[] { new DefaultTrustManager() },
+                     new SecureRandom());
+            SSLContext.setDefault(ctx);
+        } catch (NoSuchAlgorithmException | KeyManagementException e) {
+            System.err.println("Error setting SSL up: " + e.getMessage());
+            e.printStackTrace();
+        }
+        return ctx;
+    }
+
+    /**
+     * Forgiving trust manager for talking to https://...
+     */
+    private static class DefaultTrustManager implements X509TrustManager {
+
+        @Override
+        public void checkClientTrusted(X509Certificate[] arg0, String arg1)
+            throws CertificateException {
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] arg0, String arg1)
+            throws CertificateException {
+        }
+
+        @Override
+        public X509Certificate[] getAcceptedIssuers() {
+            return null;
+        }
+    }
+
     private FilterQuery createFilterQuery() {
         String[] termsArray = this.limit(this.toStringArray(this.filterTerms), MAX_TRACK_TERMS);
-        long[] idsArray = this.limit(this.toPrimitiveArray(this.userIds), FOLLOW_LIMIT);
+
+        List<Long> idsToFollow = this.screenNamesToIDs();
+        idsToFollow.addAll(this.userIds);
+        long[] idsArray = this.limit(this.toPrimitiveArray(idsToFollow), FOLLOW_LIMIT);
+
         String[] langsArray = this.toStringArray(this.languages);
-        double[][] geoboxenArray = this.limit(this.toDoubleArrayArray(this.geoboxen), GEOBOX_LIMIT);
+        double[][] geoboxenArray = this.limit(this.toDouble2DArray(this.geoboxen), GEOBOX_LIMIT);
 
         FilterQuery filter = new FilterQuery();
         if (termsArray.length > 0) {
@@ -319,6 +407,43 @@ public final class StreamerApp {
         filter.filterLevel(this.filterLevel);
 
         return filter;
+    }
+
+    private List<Long> screenNamesToIDs() {
+        List<Long> ids = new ArrayList<>();
+        for (String screenName : this.screenNames) {
+            try {
+                HttpPost post = new HttpPost("https://tweeterid.com/ajax.php");
+                post.setHeader("User-Agent", this.USER_AGENT);
+                List<NameValuePair> formparams = new ArrayList<>();
+                formparams.add(new BasicNameValuePair("input", screenName));
+                post.setEntity(new UrlEncodedFormEntity(formparams, Consts.UTF_8));
+
+                CloseableHttpResponse response = this.httpClient.execute(post);
+                try {
+                    HttpEntity entity = response.getEntity();
+                    if (entity != null) {
+                        long len = entity.getContentLength();
+                        if (len != -1 && len < 2048) {
+                            String string = EntityUtils.toString(entity);
+                            long id = Long.parseLong(string);
+                            System.out.println("Resolved @" + screenName + " -> " + id);
+                            ids.add(id);
+                        } else {
+                            System.err.println("Error converting screen name to ID: Error in response");
+                            EntityUtils.consume(entity);
+                            System.err.println("=> " + EntityUtils.toString(entity));
+                        }
+                    }
+                } finally {
+                    response.close();
+                }
+            } catch (IOException e) {
+                System.err.println("Error converting screen name to ID: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+        return ids;
     }
 
     private double[][] limit(double[][] array, int maxLength) {
@@ -348,7 +473,7 @@ public final class StreamerApp {
         return array;
     }
 
-    private double[][] toDoubleArrayArray(List<double[]> list) {
+    private double[][] toDouble2DArray(List<double[]> list) {
         return list.toArray(new double[list.size()][]);
     }
 
@@ -357,6 +482,9 @@ public final class StreamerApp {
     }
 
     private long[] toPrimitiveArray(List<Long> listOfLongs) {
+        if (listOfLongs.isEmpty()) {
+            return new long[]{};
+        }
         long[] longArray = new long[listOfLongs.size()];
         for (int i = 0; i < listOfLongs.size(); i++) {
             longArray[i] = listOfLongs.get(i).longValue();
@@ -646,7 +774,7 @@ public final class StreamerApp {
                 while (!in.readLine().toLowerCase().equals("q")) {
                     System.out.println("Type 'q' to quit.");
                 }
-                System.out.println("Quit command received. Shutting down...");
+                System.out.println("Quit command received. Shutting down. This may take up to a minute.");
             } catch (IOException e) {
                 System.err.println("An error occurred waiting for a quit keystroke: " +
                                    e.getMessage());
@@ -667,7 +795,9 @@ public final class StreamerApp {
     protected Map<String, Object> configAsMap() {
         final TreeMap<String, Object> config = new TreeMap<>();
         config.put("filter", this.filterTerms);
-        config.put("geo_boxes", new ArrayList<>());
+        config.put("geo_boxes", this.geoboxen);
+        config.put("screen_names", this.screenNames);
+        config.put("languages", this.languages);
         config.put("user_ids", this.userIds);
         config.put("include_media", this.includeMedia);
         config.put("queue_size", this.queueSize);
@@ -683,7 +813,8 @@ public final class StreamerApp {
         System.out.println("credentials: " + this.credentialsFile);
         System.out.println("queue size: " + this.queueSize);
         System.out.println("filters:" + this.filterTerms);
-        System.out.println("users: " + this.userIds);
+        System.out.println("user ids: " + this.userIds);
+        System.out.println("screen names: " + this.screenNames);
         System.out.println("geoboxes: " +
                            this.geoboxen.stream().map(Arrays::asList).collect(Collectors.toList()));
         System.out.println("languages: " + this.languages);
