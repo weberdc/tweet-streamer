@@ -16,10 +16,12 @@
 package au.org.dcw.twitter.ingest;
 
 import java.awt.image.BufferedImage;
+import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.Reader;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -268,12 +270,17 @@ public final class StreamerApp {
 
             producer = new Thread(this.tweetListener, "Tweet stream listener");
             consumer = new Thread(this.tweetWriter, "Tweet writer");
+            Thread quitListener =
+                new Thread(new QuitListener(consumer, this.tweetListener, this.tweetWriter),
+                           "Quit keystroke listener");
 
             producer.start();
             consumer.start();
+            quitListener.start();
 
             producer.join();
             consumer.join();
+            quitListener.join();
 
         } catch (final RuntimeException | InterruptedException e) {
             System.err.println("Something barfed: " + e.getMessage());
@@ -616,6 +623,39 @@ public final class StreamerApp {
                 throw new RuntimeException("Could not create dir " + tweetDir + " - failing out");
             }
             return tweetDir;
+        }
+    }
+
+    /**
+     * Listened to stdin for 'q' to quit the app neatly.
+     */
+    class QuitListener implements Runnable {
+        private TweetWriter writer;
+        private Thread writerThread;
+        private TweetListener tweetStream;
+
+        public QuitListener(Thread consumerThread, TweetListener tweetStream, TweetWriter tweetWriter) {
+            this.writerThread = consumerThread;
+            this.tweetStream = tweetStream;
+            this.writer = tweetWriter;
+        }
+
+        @Override
+        public void run() {
+            try (BufferedReader in = new BufferedReader(new InputStreamReader(System.in))) {
+                while (!in.readLine().toLowerCase().equals("q")) {
+                    System.out.println("Type 'q' to quit.");
+                }
+                System.out.println("Quit command received. Shutting down...");
+            } catch (IOException e) {
+                System.err.println("An error occurred waiting for a quit keystroke: " +
+                                   e.getMessage());
+            } finally {
+                this.tweetStream.close();
+
+                this.writer.shuttingDown = true;
+                this.writerThread.interrupt();
+            }
         }
     }
 
