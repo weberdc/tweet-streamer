@@ -17,6 +17,7 @@
 apply plugin: 'java'
 apply plugin: 'application'
 apply plugin: 'idea'
+apply plugin: 'eclipse'
 apply plugin: 'distribution'
 
 mainClassName = 'au.org.dcw.twitter.ingest.StreamerApp'
